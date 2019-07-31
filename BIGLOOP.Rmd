@@ -1,0 +1,145 @@
+---
+title: "BIG_LOOP"
+author: "Qi Hu"
+date: "May 19, 2019"
+output:
+  html_document:
+    df_print: paged
+---
+```{r,message=FALSE,warning=FALSE}
+library("tseries")
+library("forecast")
+library("stats")
+library(ineq)
+library(e1071)
+IR<-read.csv("C:/Users/Miss Chaos/OneDrive/capstone/data/IR.csv")
+EX<-read.csv("C:/Users/Miss Chaos/OneDrive/capstone/data/EX.csv")[5478:17649,]
+IR$US_UK<-IR[,2]-IR[,3]
+IR$US_JP<-IR[,2]-IR[,4]
+```
+
+```{r,fig2, fig.height = 6, fig.width = 11.5,message=FALSE,error=F}
+attach(IR)
+US_UK<-IR$US_UK
+arfit<-ar(US_UK,order.max = 1)
+    
+x<-vector()
+x[1]<-US_UK[1]
+error<-c(0)
+    
+
+for (k in c(0.1,0.3,0.55,0.7,0.9,0.1)){
+for (t in (2:length(US_UK))){
+  x[t]<-(1-k)*arfit$ar*x[t-1]+k*US_UK[t]
+  error[t]=US_UK[t]-x[t]
+  }
+surpriseUP<-vector()
+surpriseDWN<-vector()
+for (t in (2:length(error))){
+  if (error[t-1]<=0 & error[t]>0){
+    surpriseUP<-append(surpriseUP,t)
+  }else if(error[t-1]>=0 & error[t]<0){
+    surpriseDWN<-append(surpriseDWN,t)
+  }
+}
+duration<-surpriseDWN[1:min(length(surpriseDWN),length(surpriseUP))]-surpriseUP[1:min(length(surpriseDWN),length(surpriseUP))]
+
+buy_point<-c()
+sell_point<-c()
+for (i in 1:length(duration)){
+  if (duration[i]>=2){
+    buy_point=c(buy_point,surpriseUP[i]+2)
+    sell_point=c(sell_point,surpriseDWN[i]+2)
+  }
+}
+attach(EX)
+initialUSD<-50000
+initialGBP<-50000
+totalGBP<-initialGBP
+totalUSD<-initialUSD
+initial_in_USD<-totalUSD+totalGBP*USD.GBP[1]
+profit_in_USD<-c(0)
+netprofit<-c(0)
+total_in_USD<-initial_in_USD
+rate_of_return<-0
+sell_share_GBP<-1000
+sell_share_USD<-1200
+
+for (i in 2:length(error)){
+  if (i %in% buy_point){
+    totalGBP[i]<-totalGBP[i-1]-sell_share_GBP
+    totalUSD[i]<-totalUSD[i-1]+sell_share_GBP*USD.GBP[i]
+    total_in_USD[i]<-totalUSD[i]+totalGBP[i]*USD.GBP[i]
+    profit_in_USD[i]<-total_in_USD[i]-initial_in_USD
+    netprofit[i]<-total_in_USD[i]-total_in_USD[i-1]
+  }else if (i %in% sell_point){
+    totalGBP[i]<-totalGBP[i-1]+sell_share_USD/USD.GBP[i]
+    totalUSD[i]<-totalUSD[i-1]-sell_share_USD
+    total_in_USD[i]<-totalUSD[i]+totalGBP[i]*USD.GBP[i]
+    profit_in_USD[i]<-total_in_USD[i]-initial_in_USD
+    netprofit[i]<-total_in_USD[i]-total_in_USD[i-1]
+  }else{
+    totalGBP[i]<-totalGBP[i-1]
+    totalUSD[i]<-totalUSD[i-1]
+    total_in_USD[i]<-total_in_USD[i-1]
+    profit_in_USD[i]<-profit_in_USD[i-1]
+    netprofit[i]<-netprofit[i-1]
+  }
+  rate_of_return[i]<-100*(total_in_USD[i]-total_in_USD[i-1])/total_in_USD[i-1]
+}
+result<-data.frame(DATE=EX$DATE,totalGBP,totalUSD,total_in_USD,profit_in_USD,netprofit,rate_of_return)
+
+plot(result$profit_in_USD,type="l")
+abline(h=0, col="red")
+}
+
+#average annual rate of return, sharpe ratio, skewness, Gini
+auto.arima(error)
+```
+
+```{r,error=FALSE}
+
+propoties<-data.frame(YEAR=1986:2019)
+propoties$DAYS[1]<-364
+propoties[34,2]<-12172-12053+1
+propoties$StartLOC<-c(1)
+for (i in 2:length(propoties$YEAR)){
+  if (propoties$YEAR[i]%%4==0){
+  propoties$DAYS[i]=366
+  }else{
+  propoties$DAYS[i]=365}
+  propoties$StartLOC[i]=propoties$StartLOC[i-1]+propoties$DAYS[i-1]
+}
+
+totalreturn<-(result$total_in_USD[length(result$total_in_USD)]-result$total_in_USD[1])/result$total_in_USD[1]
+totalSR<-totalreturn/sd(rate_of_return,na.rm = T)
+
+
+for (i in 1:length(propoties$YEAR)){
+  if(i==length(propoties$YEAR)){
+    propoties$AnnualReurn[i]<-100*(result$total_in_USD[length(result$total_in_USD)]-result$total_in_USD[propoties$StartLOC[i]])/result$total_in_USD[propoties$StartLOC[i]]
+  }else{
+  propoties$AnnualReurn[i]<-100*(result$total_in_USD[propoties$StartLOC[i+1]-1]-result$total_in_USD[propoties$StartLOC[i]])/result$total_in_USD[propoties$StartLOC[i]]}
+#  propoties$SD[i]<-sd(result$rate_of_return[(propoties$StartLOC[i]):(propoties$StartLOC[i+1]-1)],na.rm = T)
+#  propoties$SR[i]<-propoties$AnnualReurn[i]/propoties$SD[i]
+}
+
+
+sk<-skewness(result$rate_of_return)
+#gini=Gini(rate_of_return)
+gini=Gini(propoties$AnnualReurn)
+propoties
+cat("gini:",gini)
+cat("sk:",sk)
+cat("annual return (since inception):",totalreturn,"\n
+Sharpe Ratio:",totalSR)
+plot(Lc(propoties$AnnualReurn),col="darkred",lwd=2)
+```
+
+
+
+
+
+
+
+

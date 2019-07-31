@@ -1,0 +1,292 @@
+---
+title: "Capstone"
+author: "Qi Hu"
+date: "May 16, 2019"
+output: pdf_document
+---
+#library
+```{r,message=F}
+library(dlm)#kalman filter
+library(tidyverse)#for ployying
+library("tseries")
+library("forecast")
+library("stats")
+library(ineq)
+library(qcc)#cusum
+library(EnvStats)#geometric mean
+require(pracma)# Gini
+```
+#read data
+```{r}
+IR_Orgnl<-read.csv("C:/Users/Miss Chaos/OneDrive/capstone/data/IR.csv")
+EX_Orgnl<-read.csv("C:/Users/Miss Chaos/OneDrive/capstone/data/EX.csv")[5478:17649,]
+IR<-IR_Orgnl
+EX<-EX_Orgnl
+IR$US_UK<-IR[,2]-IR[,3]
+IR$US_JP<-IR[,2]-IR[,4]
+US_UK<-IR$US_UK
+USD.GBP<-EX$USD.GBP
+```
+ $z=\frac{x-mean(x)}{sd(x)}$
+
+```{r,fig.height = 6, fig.width = 15}
+t<-seq(1986, 2019,length=length(IR$US_UK))
+
+plot((USD.GBP-mean(USD.GBP))/sd(USD.GBP),x=t,col="cornflowerblue",type = "l",ylab="Standardized Value",xlab="",ylim = c(-3.5,3),lwd=2)
+lines((US_UK-mean(US_UK))/sd(US_UK),x=t,type = "l",col="brown",lwd=2)
+legend(2014.5,3,legend = c("Interest Rate Differencial","Exchange Rate"),col = c("brown","cornflowerblue"),lty=1,cex = 0.8,bg='lightgrey')
+#main="Interest Rate Differential Between US and UK")
+```
+#interest rate differential
+```{r,fig2, fig.height = 6, fig.width = 15}
+#tsdisplay(US_UK)
+arfit<-ar(US_UK,order.max = 1)
+
+x<-vector()
+x[1]<-US_UK[1]
+error<-c(0) 
+par(mfrow=c(2,1))
+
+#plot the filter error and fitted value verses ovservations
+  for (t in (2:length(US_UK))){
+    x[t]<-(1-k)*arfit$ar*x[t-1]+k*US_UK[t]
+    error[t]=US_UK[t]-x[t]
+  }
+
+#  plot(x,col='red',type="l",lwd=2)
+#  lines(US_UK)
+  plot(error,type = "h",main="Filter Error")
+  abline(h=0, col="red")
+#library(strucchange)
+#y=recresid(error~1)
+#plot(y,type="l")
+#plot(efp(error~1,type="Rec-CUSUM"))
+```
+#trading point
+```{r,fig.width=12, fig.height=5.5}
+surpriseUP<-vector();surpriseDWN<-vector()
+
+for (t in (2:length(error))){
+  if (error[t-1]<=0 & error[t]>0){
+    surpriseUP<-append(surpriseUP,t)}
+  else if(error[t-1]>=0 & error[t]<0){
+    surpriseDWN<-append(surpriseDWN,t)
+  }
+}
+
+a<-c();m=0
+for (i in 1:length(surpriseDWN)){
+  a<-append(a,surpriseUP[i])
+  a<-append(a,-surpriseDWN[i])
+}
+
+buy_point<-c();sell_point<-c()
+
+for(i in 1:(length(a)-1)){
+  if (abs(a[i])==abs(m)){
+    next
+  }
+  if (a[i] >0){
+    buy_point[i]<-a[i]
+    if ((abs(a[i+1])-a[i])<=30){
+      m=a[i+1]
+      sell_point[i]<-abs(a[i+1])
+    }else if ((abs(a[i+1])-a[i])>30){
+      sell_point[i]<-a[i]+29
+    }
+  }
+  if (a[i]<0){
+    sell_point[i]<-abs(a[i])
+    if ((abs(a[i+1])-abs(a[i]))<=30){
+      m=a[i+1]
+      buy_point[i]<-a[i+1]
+    }else if (abs(a[i+1])-abs(a[i])>30){
+      buy_point[i]<-abs(a[i])+29
+    }
+  }
+}
+df<-na.omit(data.frame(buy_point,sell_point))
+```
+
+```{r,fig.width=12, fig.height=5.5}
+par(mfrow=c(2,1))
+duration<-abs(df$buy_point-df$sell_point)
+plot(duration,type="h",xlab = "switching times",ylab = "lasting days")
+abline(h=2,col="skyblue")
+
+buy<-c();sell<-c()
+for (i in 1:length(duration)){
+  if (duration[i]>= 2){
+    buy=c(buy,df$buy_point[i]+1)
+    sell=c(sell,df$sell_point[i]+1)
+  }
+}
+df2<-data.frame(buy,sell) 
+duration<-abs(buy-sell)
+plot(duration,type="h",xlab = "switching times",ylab = "lasting days")
+abline(h=3,col="skyblue")
+```
+#trading strategy
+
+```{r}
+attach(EX)
+USD.GBP<-EX$USD.GBP
+initialUSD<-10000
+initialGBP<-10000
+totalGBP<-initialGBP
+totalUSD<-initialUSD
+initial_in_USD<-totalUSD+totalGBP*USD.GBP[1]
+total_in_USD<-initial_in_USD
+profit_in_USD<-c(0)
+net_per_time<-c(0)
+return_rate<-c(0)
+tradingvalue<-0
+f=c();l=c()
+tradeshare<-0.8
+#result<-data.frame(totalGBP,totalUSD,tradingvalue,total_in_USD,profit_in_USD,net_per_time)
+
+for (i in 2:length(EX$USD.GBP)){
+  if (i %in% buy){
+    tradingvalue[i]<-0.5*totalGBP[i-1]*USD.GBP[i]
+    totalGBP[i]<-0.5*totalGBP[i-1]
+    totalUSD[i]<-totalUSD[i-1]+tradingvalue[i]
+    total_in_USD[i]<-totalUSD[i]+totalGBP[i]*USD.GBP[i]
+    profit_in_USD[i]<-total_in_USD[i]-initial_in_USD
+    f<-c(f,total_in_USD[i])
+  }else if (i %in% sell){
+    tradingvalue[i]<-0.5*totalUSD[i-1]
+    totalGBP[i]<-totalGBP[i-1]+tradingvalue[i]/USD.GBP[i]
+    totalUSD[i]<-0.5*totalUSD[i-1]
+    total_in_USD[i]<-totalUSD[i]+totalGBP[i]*USD.GBP[i]
+    profit_in_USD[i]<-total_in_USD[i]-initial_in_USD
+    l<-c(l,total_in_USD[i])
+  }else{
+    tradingvalue=0
+    totalGBP[i]<-totalGBP[i-1]
+    totalUSD[i]<-totalUSD[i-1]
+    total_in_USD[i]<-total_in_USD[i-1]
+    profit_in_USD[i]<-profit_in_USD[i-1]
+  }
+}
+
+result<-data.frame(totalGBP,totalUSD,tradingvalue,total_in_USD,profit_in_USD)
+result[length(result),]
+
+for (i in (1:length(buy))){
+  if (buy[i]<sell[i]){
+    net_per_time[i]= (l[i]-f[i])
+    return_rate[i]= ((net_per_time[i])/f[i])*100
+  }else{
+    net_per_time[i]= (f[i]-l[i])
+    return_rate[i]= ((net_per_time[i])/l[i])*100
+  }
+}
+
+df2<-data.frame(buy,sell,f,l,net_per_time,return_rate)
+```
+# trading result and plot
+```{r}
+plot(df2$return_rate,type = "h")
+abline(h=0,col="red")
+plot(profit_in_USD/initial_in_USD,type="l")
+abline(h=0, col="red")
+```
+#dataframe of years
+```{r}
+propoties<-data.frame(YEAR=1986:2019)
+propoties$DAYS[1]<-364
+propoties[34,2]<-12172-12053+1
+propoties$StartLOC<-c(1)
+for (i in 2:length(propoties$YEAR)){
+  if (propoties$YEAR[i]%%4==0){
+  propoties$DAYS[i]=366
+  }else{
+  propoties$DAYS[i]=365}
+  propoties$StartLOC[i]=propoties$StartLOC[i-1]+propoties$DAYS[i-1]
+}
+
+for (j in 2:length(propoties$StartLOC)){
+  s<-c()
+  for (i in 1:length(buy)){
+    if((i>propoties$StartLOC[j-1]) & (i<=propoties$StartLOC[j])){
+      s=c(s,i)
+      propoties[j-1,4]<-length(s)
+    }
+  }
+}
+```
+
+
+```{r,fig.width=7, fig.height=5,warning=F}
+Forecast_success_ratio=sum(df2$return_rate>0)/length(df2$return_rate)
+SPratio<-mean(df2$return_rate)/sd(df2$return_rate)
+arithmetic_mean<-mean(df2$return_rate)
+#geo_mean<-geoMean(df2$return_rate)
+sk<-skewness(df2$return_rate)
+
+G<-sort(df2$return_rate)
+for (i in 2:length(G)){
+  G[i]<-G[i]+G[i-1]
+}
+G<-c(0,G)
+
+plot(G,main="Lorenz Curve for Pre-crisis Rate of Return",xlab = "cumulative periods of return rates",ylab="cumulative rates of return ",type = "l",xaxs="i",yaxs="i",ylim = c(min(G),max(G)),lwd=2)
+segments(0, 0, length(G), G[length(G)], col="darkgreen" ,lwd=2,lty = 2)
+
+sum=0;area=0
+for (i in 2:length(G)){
+  area<-(G[i]-2*min(G)+G[i-1])*(1/(length(G)-1))/2
+  sum<-sum+area
+}
+All<-((abs(min(G))+G[length(G)]-min(G))/2)
+Gini<-(All-sum)/All
+data.frame(Forecast_success_ratio,SPratio,sk,Gini,arithmetic_mean)
+```
+
+
+
+
+
+```{r,fig.width=8, fig.height=4}
+
+plot(error[1:200],type = "h",main="Filter Error",ylim = c(-1,1),ann = FALSE,axes=FALSE)
+abline(h=0, col="red")
+par(new=TRUE)
+lines(EX$USD.GBP,type = "l",col="darkgreen")
+axis(2,ylim=c(350,370))
+  
+
+#EX[5478:5478+200,]
+library(plotrix)
+twoord.plot(lx=1:300,ly=error[1:300],rx=1:200,ry=EX[$JPYUSD[5478:(5478+200)]]1:100,tyle=)
+example(twoord.plot)
+
+par(yaxs="i",las=1)
+r<-hist(return_rate,breaks = "FD",col="lightpink",border="white",prob= T,main="Distribution Histogram of Rate of Returns",xlab="Rate of Returns")
+box(bty="l")
+lines(density(return_rate),lwd=2)
+grid(nx=NA,ny=NULL,lty = 1,lwd=1,col = "gray")
+
+```
+
+```{r}
+# get font factor
+pdf(); ff<-72/par()$ps; dev.off();
+# if there are more than 20 entries 
+if (dim(x)[2] > 20) {
+    # scale output by font size
+    pdf(fout, height=dim(x)[2]/ff)
+} else {
+    pdf(fout)
+}
+# increase right margin width
+op <- par(mar = par("mar") + c(0,0,0,2*max(nchar(colnames(x)))/ff))
+# plot horizontally
+plot(as.dendrogram(hclust(distance), hang=-1), main="Dissimilarity = 1 - Correlation", xlab="", horiz=T)
+# restore margin
+par(op)
+dev.off();
+
+```
+
+
